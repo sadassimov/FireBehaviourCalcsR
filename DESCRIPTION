@@ -1,0 +1,26 @@
+Package: FireBehaviourCalcsR
+Title: Australian Fire Behaviour Prediction Models
+Version: 0.1.0
+Authors@R: c(
+    person("Kevin", "Tolhurst", role = "aut",
+           comment = "Original spreadsheet author, University of Melbourne"),
+    person("Liu", "Zhao", role = c("aut", "cre"),
+           email = "liu.zhao@utas.edu.au"),
+    person("Grant J", "Williamson", role = c("aut", "cre", "ths"),
+           email = "grant.williamson@utas.edu.au"))
+Author: Kevin Tolhurst [aut], Liu Zhao [aut, cre],
+    Grant J Williamson [aut, cre,ths]
+Maintainer: Liu Zhao <liu.zhao@utas.edu.au>
+Description: A collection of Australian fire behaviour prediction models
+    translated from the Advanced Fire Behaviour Prediction Standard Workbook
+    (Tolhurst, 2007-2016). Includes McArthur Mk5 Forest, VESTA, CSIRO
+    Grassland, Heathland (Anderson et al. 2015), Buttongrass
+    (Marsden-Smedley 2003), WA Red Book (Beck 1995), WA Mallee (McCaw 1998),
+    Mallee-Heath (Cruz et al. 2013), suppression resource calculators, and
+    supporting meteorological utilities.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends: R (>= 3.5.0)
+LazyData: true
