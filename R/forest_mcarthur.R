@@ -97,8 +97,8 @@ forest_leaflet80 <- function(temp, rh, wind_speed, drought_factor,
   if (use_bom_df) {
     fuel_avail <- drought_factor / 10
   } else {
-    fuel_avail <- min(0.972 + 0.342 * log(days_since_rain) -
-                        0.245 * log(rain_amount), 1)
+    fuel_avail <- pmin(0.972 + 0.342 * log(days_since_rain) -
+                         0.245 * log(rain_amount), 1)
   }
 
   ros_flat <- 0.22 * fuel_load * exp(0.158 * (1.674 + 0.179 * wind_speed) -
@@ -112,11 +112,9 @@ forest_leaflet80 <- function(temp, rh, wind_speed, drought_factor,
     (1 - exp(-(0.03644 * 1.1289^(ros_slope / 18.3)) *
                (fuel_avail * fuel_load / 2.2417)))
 
-  scorch_ht <- if (temp < 20) {
-    -2.19 + 2.23 * sqrt(ros_flat)
-  } else {
-    -0.296 + 2.23 * sqrt(ros_flat)
-  }
+  scorch_ht <- ifelse(temp < 20,
+    -2.19 + 2.23 * sqrt(ros_flat),
+    -0.296 + 2.23 * sqrt(ros_flat))
 
   intensity <- 18000 * fuel_load * fuel_avail * ros_slope / 36000
 

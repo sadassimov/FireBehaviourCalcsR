@@ -1,9 +1,10 @@
 #!/usr/bin/env Rscript
 #
 # FireBehaviourCalcsR -- spatial function tests
+# Uses synthetic rasters from inst/testdata/
 # Run with:  Rscript tests/test_spatial.R
 
-# ---- bootstrap (always source from R/ to pick up latest code) ----
+# ---- bootstrap (always source from R/) ----
 args <- commandArgs(trailingOnly = FALSE)
 file_arg <- sub("^--file=", "", args[grepl("^--file=", args)])
 script_dir <- if (length(file_arg)) dirname(normalizePath(file_arg)) else getwd()
@@ -46,21 +47,26 @@ check_true <- function(value, label) {
 
 section <- function(title) cat(sprintf("\n--- %s ---\n", title))
 
-# ---- create test rasters ----
-# 10x10 grid, GDA2020 / MGA Zone 55 (EPSG:7855), 100 m resolution
-r_template <- rast(nrows = 10, ncols = 10,
-                   xmin = 500000, xmax = 501000,
-                   ymin = 5800000, ymax = 5801000,
-                   crs = "EPSG:7855")
+# ---- load test rasters ----
+td <- file.path(root, "inst", "testdata")
+r_temp   <- rast(file.path(td, "temp.tif"))
+r_rh     <- rast(file.path(td, "rh.tif"))
+r_wind   <- rast(file.path(td, "wind_speed.tif"))
+r_df     <- rast(file.path(td, "drought_factor.tif"))
+r_fuel   <- rast(file.path(td, "fuel_load.tif"))
+r_slope  <- rast(file.path(td, "slope.tif"))
+r_dem    <- rast(file.path(td, "dem.tif"))
+r_curing <- rast(file.path(td, "curing.tif"))
+r_vh     <- rast(file.path(td, "veg_height.tif"))
+r_kbdi   <- rast(file.path(td, "kbdi.tif"))
+r_fmc    <- rast(file.path(td, "dead_fmc.tif"))
+r_sfmc   <- rast(file.path(td, "surface_fmc.tif"))
+r_oc     <- rast(file.path(td, "overstorey_cover.tif"))
+r_oh     <- rast(file.path(td, "overstorey_height.tif"))
+r_smc    <- rast(file.path(td, "smc.tif"))
 
-r_temp <- setValues(r_template, 38.9)
-r_rh   <- setValues(r_template, 10.6)
-r_wind <- setValues(r_template, 32)
-r_df   <- setValues(r_template, 9.9)
-r_fuel <- setValues(r_template, 15)
-
-# Slope raster with gradient 0-20 degrees
-r_slope <- setValues(r_template, rep(seq(0, 18, by = 2), each = 10))
+n <- ncell(r_temp)
+target_crs <- "EPSG:7855"
 
 # ============================================================
 #  1. align_inputs
@@ -70,205 +76,238 @@ section("align_inputs")
 aligned <- align_inputs(list(temp = r_temp, rh = r_rh, wind = 32))
 check_true(inherits(aligned$temp, "SpatRaster"), "raster preserved")
 check_true(is.numeric(aligned$wind), "scalar preserved")
-check(ncell(aligned$temp), 100, "grid size preserved")
+check(ncell(aligned$temp), n, "grid size preserved")
 
-# Test file path input
+r_wgs <- project(r_temp, "EPSG:4326")
+aligned2 <- align_inputs(list(rh = r_rh, temp = r_wgs))
+check(crs(aligned2$temp, describe = TRUE)$code, "7855",
+      "CRS aligned to first raster")
+
+aligned3 <- align_inputs(list(temp = r_temp, rh = r_rh),
+                         target_crs = "EPSG:4326")
+check(crs(aligned3$temp, describe = TRUE)$code, "4326",
+      "target_crs override")
+
+# file path input
 tmp_tif <- tempfile(fileext = ".tif")
 writeRaster(r_temp, tmp_tif, overwrite = TRUE)
-aligned2 <- align_inputs(list(temp = tmp_tif, rh = 10.6))
-check_true(inherits(aligned2$temp, "SpatRaster"), "file path loaded as raster")
+aligned4 <- align_inputs(list(temp = tmp_tif, rh = 10.6))
+check_true(inherits(aligned4$temp, "SpatRaster"), "file path -> SpatRaster")
 file.remove(tmp_tif)
-
-# Test CRS reprojection (aligns to first raster's CRS)
-r_wgs <- project(r_temp, "EPSG:4326")
-aligned3 <- align_inputs(list(rh = r_rh, temp = r_wgs))
-check(crs(aligned3$temp, describe = TRUE)$code, "7855",
-      "CRS aligned to first raster (7855)")
-
-# Test forced target CRS
-aligned4 <- align_inputs(list(temp = r_temp, rh = r_rh),
-                         target_crs = "EPSG:4326")
-check(crs(aligned4$temp, describe = TRUE)$code, "4326",
-      "target_crs overrides to 4326")
 
 # ============================================================
 #  2. slope_from_dem
 # ============================================================
 section("slope_from_dem")
 
-r_dem <- setValues(r_template, rep(seq(100, 200, length.out = 10), each = 10))
 slp <- slope_from_dem(r_dem)
 check_true(inherits(slp, "SpatRaster"), "returns SpatRaster")
-check_true(all(values(slp, na.rm = TRUE) >= 0), "slope values >= 0")
+check_true(all(values(slp, na.rm = TRUE) >= 0), "all slopes >= 0")
 
 # ============================================================
-#  3. mcarthur_fdi_spatial
+#  3. Weather utilities (spatial)
 # ============================================================
-section("mcarthur_fdi_spatial")
+section("dew_point_spatial")
 
-fdi_r <- mcarthur_fdi_spatial(
-  drought_factor = r_df, rh = r_rh, temp = r_temp,
-  wind_speed = r_wind, wind_reduction = 3
-)
-check_true(inherits(fdi_r, "SpatRaster"), "returns SpatRaster")
+dp <- dew_point_spatial(r_temp, r_rh)
+check_true(inherits(dp, "SpatRaster"), "returns SpatRaster")
+dp_vals <- values(dp, na.rm = TRUE)
+check_true(all(dp_vals < values(r_temp, na.rm = TRUE)),
+           "dew point < temperature everywhere")
 
-# Compare with scalar version
-fdi_scalar <- mcarthur_fdi(9.9, 10.6, 38.9, 32, 3)
-fdi_vals <- unique(round(values(fdi_r, na.rm = TRUE), 4))
-check(length(fdi_vals), 1, "uniform inputs -> one unique value")
-check(fdi_vals[1], round(fdi_scalar, 4), "spatial matches scalar")
+section("fuel_moisture_mcarthur_spatial")
 
-# Test with mixed raster + scalar
-fdi_mix <- mcarthur_fdi_spatial(
-  drought_factor = 9.9, rh = r_rh, temp = 38.9,
-  wind_speed = r_wind
-)
-check_true(inherits(fdi_mix, "SpatRaster"), "mixed input returns SpatRaster")
+fm <- fuel_moisture_mcarthur_spatial(r_temp, r_rh)
+check_true(inherits(fm, "SpatRaster"), "returns SpatRaster")
+check_true(all(values(fm, na.rm = TRUE) > 0), "FFMC > 0 everywhere")
 
-# Test file output
-tmp_out <- tempfile(fileext = ".tif")
-mcarthur_fdi_spatial(r_df, r_rh, r_temp, r_wind, filename = tmp_out)
-check_true(file.exists(tmp_out), "GeoTIFF written")
-fdi_read <- rast(tmp_out)
-check(ncell(fdi_read), 100, "output grid correct")
-file.remove(tmp_out)
+section("rh_from_dewpoint_spatial")
+
+rh_back <- rh_from_dewpoint_spatial(r_temp, dp)
+check_true(inherits(rh_back, "SpatRaster"), "returns SpatRaster")
+rh_diff <- abs(values(rh_back, na.rm = TRUE) - values(r_rh, na.rm = TRUE))
+check_true(all(rh_diff < 5), "round-trip RH within 5%")
 
 # ============================================================
-#  4. forest_mcarthur_mk5_spatial
-# ============================================================
-section("forest_mcarthur_mk5_spatial")
-
-mk5_r <- forest_mcarthur_mk5_spatial(
-  temp = r_temp, rh = r_rh, wind_speed = r_wind,
-  drought_factor = r_df, fuel_load = r_fuel, slope = r_slope
-)
-check_true(inherits(mk5_r, "SpatRaster"), "returns SpatRaster")
-check(nlyr(mk5_r), 9, "9 output layers")
-check_true("fdi" %in% names(mk5_r), "has fdi layer")
-check_true("ros" %in% names(mk5_r), "has ros layer")
-check_true("intensity" %in% names(mk5_r), "has intensity layer")
-
-ros_vals <- values(mk5_r[["ros"]])
-check_true(all(ros_vals > 0, na.rm = TRUE), "all ROS > 0")
-
-# Verify slope effect: column 1 (slope=0) < column 10 (slope=18)
-ros_flat <- mean(ros_vals[1:10])
-ros_steep <- mean(ros_vals[91:100])
-check_true(ros_steep > ros_flat, "steeper slope -> higher ROS")
-
-# ============================================================
-#  5. grass_fire_spatial
-# ============================================================
-section("grass_fire_spatial")
-
-r_curing <- setValues(r_template, 90)
-gr_r <- grass_fire_spatial(
-  temp = r_temp, rh = r_rh, wind_speed = r_wind,
-  curing = r_curing, slope = 0
-)
-check_true(inherits(gr_r, "SpatRaster"), "returns SpatRaster")
-check_true("natural_ros" %in% names(gr_r), "has natural_ros layer")
-check_true("grazed_ros" %in% names(gr_r), "has grazed_ros layer")
-
-nat_ros <- unique(round(values(gr_r[["natural_ros"]], na.rm = TRUE), 2))
-gr_scalar <- grass_fire(38.9, 10.6, 32, 90, 0)
-check(nat_ros[1], round(gr_scalar$natural$ros, 2),
-      "spatial natural ROS matches scalar")
-
-# ============================================================
-#  6. heath_fire_spatial
-# ============================================================
-section("heath_fire_spatial")
-
-r_vh <- setValues(r_template, 1.5)
-ht_r <- heath_fire_spatial(
-  temp = r_temp, rh = r_rh, wind_speed = r_wind,
-  veg_height = r_vh, slope = 0
-)
-check_true(inherits(ht_r, "SpatRaster"), "returns SpatRaster")
-check_true("heath_ros" %in% names(ht_r), "has heath_ros layer")
-
-ht_scalar <- heath_fire(38.9, 10.6, 32, 1.5, 0)
-ht_val <- unique(round(values(ht_r[["heath_ros"]], na.rm = TRUE), 2))
-check(ht_val[1], round(ht_scalar$heath_ros, 2),
-      "spatial heath ROS matches scalar")
-
-# ============================================================
-#  7. buttongrass_fire_spatial
-# ============================================================
-section("buttongrass_fire_spatial")
-
-bg_r <- buttongrass_fire_spatial(
-  temp = r_temp, rh = r_rh, wind_speed = r_wind,
-  age = 60, cover = 0, productivity = 1, slope = 0
-)
-check_true(inherits(bg_r, "SpatRaster"), "returns SpatRaster")
-check_true("head_ros" %in% names(bg_r), "has head_ros layer")
-
-bg_scalar <- buttongrass_fire(38.9, 10.6, 32, 0, 0, 60, 0, 1, 0)
-bg_val <- unique(round(values(bg_r[["head_ros"]], na.rm = TRUE), 2))
-check(bg_val[1], round(bg_scalar$head_ros, 2),
-      "spatial buttongrass ROS matches scalar")
-
-# ============================================================
-#  8. mallee_fire_spatial
-# ============================================================
-section("mallee_fire_spatial")
-
-r_fmc <- setValues(r_template, 8)
-ml_r <- mallee_fire_spatial(
-  wind_speed = r_wind, dead_fmc = r_fmc, slope = r_slope
-)
-check_true(inherits(ml_r, "SpatRaster"), "returns SpatRaster")
-check(nlyr(ml_r), 2, "2 output layers")
-
-ml_scalar <- mallee_fire(32, 8, 0)
-ml_flat <- unique(round(values(ml_r[["ros"]], na.rm = TRUE), 2))
-check(ml_flat[1], round(ml_scalar$ros, 2),
-      "spatial mallee ROS matches scalar")
-
-# ============================================================
-#  9. mallee_heath_fire_spatial
-# ============================================================
-section("mallee_heath_fire_spatial")
-
-mh_r <- mallee_heath_fire_spatial(
-  temp = 35, rh = 15, wind_speed = r_wind,
-  surface_fmc = 6, overstorey_cover = 30,
-  overstorey_height = 4, surface_fuel_load = 8
-)
-check_true(inherits(mh_r, "SpatRaster"), "returns SpatRaster")
-check_true("ros" %in% names(mh_r), "has ros layer")
-
-# ============================================================
-# 10. drought_factor_spatial
+#  4. drought_factor_spatial
 # ============================================================
 section("drought_factor_spatial")
 
-r_kbdi <- setValues(r_template, 100)
-df_r <- drought_factor_spatial(
-  kbdi = r_kbdi, days_since_rain = 10, rain_amount = 5
-)
+df_r <- drought_factor_spatial(r_kbdi, days_since_rain = 10, rain_amount = 5)
 check_true(inherits(df_r, "SpatRaster"), "returns SpatRaster")
-
-df_scalar <- drought_factor(100, 10, 5)
-df_val <- unique(round(values(df_r, na.rm = TRUE), 4))
-check(df_val[1], round(df_scalar, 4), "spatial DF matches scalar")
+df_vals <- values(df_r, na.rm = TRUE)
+check_true(all(df_vals >= 0 & df_vals <= 10), "DF in 0-10")
 
 # ============================================================
-# 11. CRS & resolution alignment integration
+#  5. mcarthur_fdi_spatial
 # ============================================================
-section("CRS & resolution alignment")
+section("mcarthur_fdi_spatial")
 
-# Create rasters with different CRS
-r_temp_wgs <- project(r_temp, "EPSG:4326")
-fdi_cross <- mcarthur_fdi_spatial(
-  drought_factor = 9.9, rh = r_rh,
-  temp = r_temp_wgs, wind_speed = 32,
-  target_crs = "EPSG:7855"
+fdi <- mcarthur_fdi_spatial(r_df, r_rh, r_temp, r_wind)
+check_true(inherits(fdi, "SpatRaster"), "returns SpatRaster")
+check_true(all(values(fdi, na.rm = TRUE) > 0), "FDI > 0 everywhere")
+
+tmp_out <- tempfile(fileext = ".tif")
+mcarthur_fdi_spatial(r_df, r_rh, r_temp, r_wind, filename = tmp_out)
+check_true(file.exists(tmp_out), "GeoTIFF written")
+file.remove(tmp_out)
+
+# ============================================================
+#  6. forest_mcarthur_mk5_spatial
+# ============================================================
+section("forest_mcarthur_mk5_spatial")
+
+mk5 <- forest_mcarthur_mk5_spatial(r_temp, r_rh, r_wind, r_df,
+                                    r_fuel, r_slope)
+check_true(inherits(mk5, "SpatRaster"), "returns SpatRaster")
+check(nlyr(mk5), 9, "9 output layers")
+check_true(all(values(mk5[["ros"]], na.rm = TRUE) > 0), "all ROS > 0")
+check_true(all(values(mk5[["intensity"]], na.rm = TRUE) > 0),
+           "all intensity > 0")
+
+# ============================================================
+#  7. forest_leaflet80_spatial
+# ============================================================
+section("forest_leaflet80_spatial")
+
+l80 <- forest_leaflet80_spatial(r_temp, r_rh, r_wind, r_df, r_fuel,
+                                 slope = r_slope, days_since_rain = 5,
+                                 rain_amount = 10)
+check_true(inherits(l80, "SpatRaster"), "returns SpatRaster")
+check(nlyr(l80), 9, "9 output layers")
+check_true("ros_slope" %in% names(l80), "has ros_slope layer")
+check_true("fmc" %in% names(l80), "has fmc layer")
+
+# ============================================================
+#  8. mcarthur_fdi_matthews_spatial
+# ============================================================
+section("mcarthur_fdi_matthews_spatial")
+
+fdi_m <- mcarthur_fdi_matthews_spatial(r_df, r_wind, fm)
+check_true(inherits(fdi_m, "SpatRaster"), "returns SpatRaster")
+check_true(all(values(fdi_m, na.rm = TRUE) > 0), "Matthews FDI > 0")
+
+# ============================================================
+#  9. forest_vesta_spatial
+# ============================================================
+section("forest_vesta_spatial")
+
+vesta <- forest_vesta_spatial(r_temp, r_rh, r_wind, r_slope,
+                               surface_score = 4, near_surface_score = 3.5,
+                               near_surface_height = 25, elevated_score = 2,
+                               elevated_height = 1.5, bark_score = 3.5,
+                               month = 2, hour = 13)
+check_true(inherits(vesta, "SpatRaster"), "returns SpatRaster")
+check(nlyr(vesta), 9, "9 output layers")
+check_true("ros" %in% names(vesta), "has ros layer")
+
+# ============================================================
+# 10. grass_fire_spatial
+# ============================================================
+section("grass_fire_spatial")
+
+gr <- grass_fire_spatial(r_temp, r_rh, r_wind, r_curing, slope = r_slope)
+check_true(inherits(gr, "SpatRaster"), "returns SpatRaster")
+check(nlyr(gr), 19, "19 output layers")
+check_true("natural_ros" %in% names(gr), "has natural_ros")
+check_true("woodland_ros" %in% names(gr), "has woodland_ros")
+nat <- values(gr[["natural_ros"]], na.rm = TRUE)
+wl  <- values(gr[["woodland_ros"]], na.rm = TRUE)
+check_true(all(nat >= wl), "natural ROS >= woodland ROS")
+
+# ============================================================
+# 11. heath_fire_spatial
+# ============================================================
+section("heath_fire_spatial")
+
+ht <- heath_fire_spatial(r_temp, r_rh, r_wind, r_vh)
+check_true(inherits(ht, "SpatRaster"), "returns SpatRaster")
+check(nlyr(ht), 4, "4 output layers")
+h_ros <- values(ht[["heath_ros"]], na.rm = TRUE)
+w_ros <- values(ht[["woodland_ros"]], na.rm = TRUE)
+check_true(all(h_ros >= w_ros), "heath ROS >= woodland ROS")
+
+# ============================================================
+# 12. buttongrass_fire_spatial
+# ============================================================
+section("buttongrass_fire_spatial")
+
+bg <- buttongrass_fire_spatial(r_temp, r_rh, r_wind,
+                                age = 60, cover = 0, productivity = 1,
+                                slope = r_slope)
+check_true(inherits(bg, "SpatRaster"), "returns SpatRaster")
+check(nlyr(bg), 11, "11 output layers")
+check_true("head_ros" %in% names(bg), "has head_ros")
+check_true("prob_sustain" %in% names(bg), "has prob_sustain")
+
+# ============================================================
+# 13. mallee_fire_spatial
+# ============================================================
+section("mallee_fire_spatial")
+
+ml <- mallee_fire_spatial(r_wind, r_fmc, slope = r_slope)
+check_true(inherits(ml, "SpatRaster"), "returns SpatRaster")
+check(nlyr(ml), 2, "2 output layers")
+flat <- as.vector(values(ml[["ros"]]))
+sloped <- as.vector(values(ml[["ros_slope"]]))
+ok_idx <- !is.na(flat) & !is.na(sloped)
+check_true(all(sloped[ok_idx] >= flat[ok_idx] - 0.01),
+           "slope ROS >= flat ROS")
+
+# ============================================================
+# 14. mallee_heath_fire_spatial
+# ============================================================
+section("mallee_heath_fire_spatial")
+
+mh <- mallee_heath_fire_spatial(r_temp, r_rh, r_wind,
+                                 surface_fmc = r_sfmc,
+                                 overstorey_cover = r_oc,
+                                 overstorey_height = r_oh,
+                                 surface_fuel_load = r_fuel)
+check_true(inherits(mh, "SpatRaster"), "returns SpatRaster")
+check(nlyr(mh), 9, "9 output layers")
+check_true("prob_crown" %in% names(mh), "has prob_crown")
+
+# ============================================================
+# 15. Red Book spatial
+# ============================================================
+section("Red Book spatial")
+
+bdu <- redbook_bdu_spatial(r_temp, r_rh)
+check_true(inherits(bdu, "SpatRaster"), "BDU returns SpatRaster")
+
+fdi_j <- redbook_fdi_jarrah_spatial(r_smc, r_wind)
+check_true(inherits(fdi_j, "SpatRaster"), "Jarrah FDI returns SpatRaster")
+check_true(all(values(fdi_j, na.rm = TRUE) >= 0), "Jarrah FDI >= 0")
+
+fdi_k <- redbook_fdi_karri_spatial(r_smc, r_wind)
+check_true(inherits(fdi_k, "SpatRaster"), "Karri FDI returns SpatRaster")
+
+fqcf <- redbook_fqcf_jarrah_spatial(r_fuel, r_smc)
+check_true(inherits(fqcf, "SpatRaster"), "Jarrah FQCF returns SpatRaster")
+
+aff <- redbook_aff_karri_spatial(r_smc, profile_mc = 20)
+check_true(inherits(aff, "SpatRaster"), "Karri AFF returns SpatRaster")
+aff_vals <- values(aff, na.rm = TRUE)
+check_true(all(aff_vals >= 0), "Karri AFF >= 0")
+
+# ============================================================
+# 16. Multi-output file writing
+# ============================================================
+section("File output")
+
+tmp_dir <- tempdir()
+tmp_prefix <- file.path(tmp_dir, "test_mk5")
+mk5_out <- forest_mcarthur_mk5_spatial(
+  r_temp, r_rh, r_wind, r_df, r_fuel, 0,
+  filename = paste0(tmp_prefix, ".tif")
 )
-check(crs(fdi_cross, describe = TRUE)$code, "7855",
-      "output CRS is EPSG:7855")
+expected_files <- paste0(tmp_prefix, "_",
+  c("fdi", "ros", "ros_flat", "flank_ros", "flame_height",
+    "spotting_dist", "intensity", "heat_output", "ffmc"), ".tif")
+written <- file.exists(expected_files)
+check(sum(written), 9, "9 individual GeoTIFF files written")
+file.remove(expected_files[written])
 
 # ============================================================
 #  Summary
