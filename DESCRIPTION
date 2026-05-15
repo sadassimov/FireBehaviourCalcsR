@@ -23,4 +23,5 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Depends: R (>= 3.5.0)
+Suggests: terra (>= 1.7.0)
 LazyData: true
